@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# subj variables, input/output/run paths, singularity info
+subj_id=SUBJECTID
+#mriqc_vr=mriqc_MRIQCVERSION
+#log_num=LOGNUM
+ses_id=SESID
+data_dir=DATADIR
+output=OUTPUT
+data_bucket=BUCKET
+run_dir=RUNDIR
+singularity=`which singularity`
+#sif_img=/home/faird/shared/code/external/utilities/mriqc/mriqc_23.1.0rc0.sif
+#sif_img=/home/faird/shared/code/external/utilities/mriqc/mriqc_23.0.0rc1.sif
+sif_img=/home/faird/shared/code/external/utilities/mriqc/mriqc_22.0.6.sif 
+#mriqclog_dir=${run_dir}/mriqc_${ses_id}_logs
+#compdate=$(date)
+
+# pull down needed data and files from BIDS bucket
+if [ ! -d ${data_dir}/sub-${subj_id}/ses-${ses_id} ]; then
+	mkdir -p ${data_dir}/sub-${subj_id}
+	s3cmd get ${data_bucket}/unprocessed/niftis/sub-${subj_id}/ses-${ses_id} ${data_dir}/sub-${subj_id} --recursive -v
+fi
+
+if [ ! -e ${data_dir}/dataset_description.json ]; then
+	cp ${run_dir}/dataset_description.json ${data_dir}
+fi
+# remove short runs to reduce errors
+# for f in ${data_dir}/bids_dir/sub-${subj_id}_ses-${ses_id}/sub-${subj_id}/ses-${ses_id}/func/sub-*.nii.gz ; do     
+# 	file=$(basename "$f")
+# 	vol=$(fslinfo "$f" | awk '$1=="dim4"{print $2}')
+# 	if [[ "$file" == *.json || "$file" == *.nii.gz ]] && (( $(echo "$vol < 51" | bc -l) )); then         
+# 		rm $f ; echo "Vols: $vol ; Removed $file "     
+# 	fi 
+# done
+
+if [ ! -d ${data_dir}/mriqc_output ]; then
+    mkdir -p ${data_dir}/derivatives/mriqc_output
+fi
+
+# create MRIQCVERSION working dir
+if [ ! -d ${data_dir}/work_dir ]; then
+        mkdir -p ${data_dir}/derivatives/work_dir
+fi
+
+
+#run mriqc
+singularity run --cleanenv \
+-B ${data_dir}/:/bids_dir \
+-B ${output}/:/output_dir \
+-B ${data_dir}/derivatives/work_dir:/wd \
+${sif_img} \
+/bids_dir /output_dir participant \
+--ants-nthreads 8 \
+--nprocs 12 \
+--mem_gb 30 \
+-vv \
+--verbose-reports \
+-w /wd \
+-m bold T1w
+
+# for log in ${log_num} ; do
+#         comp=$(cat ${mriqclog_dir}/*_${log}.out | grep "Participant level finished successfully" | sed -e 's/^[[:space:]]*//' -e 's/[[:punct:]]//g' )
+#         mriqc_error_msg=$(cat ${mriqclog_dir}/*_${log}.err | grep 'Error' | tr -d '\n')
+
+#         if [ "${comp}" == "Participant level finished successfully" ]; then
+#                 echo -e "${subj_id}\t${ses_id}\t*_${log}.out\t${compdate}\t${mriqc_error_msg}" >> ${run_dir}/mriqc_${ses_id}_completed.csv
+#         else
+#             	echo -e "${subj_id}\t${ses_id}\t*_${log}.err\t${compdate}\t${mriqc_error_msg}" >> ${run_dir}/mriqc_${ses_id}_failed.csv
+#         fi
+# done
+
+#push processed outputs to bucket
+s3cmd sync -F --recursive -v ${data_dir}/derivatives/mriqc_output/sub-${subj_id}/ses-${ses_id}/ ${output_bucket}/sub-${subj_id}/ses-${ses_id}/
+
